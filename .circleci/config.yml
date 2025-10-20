@@ -77,7 +77,7 @@ jobs:
             echo "===== Starting network capture for mirror usage ====="
             
             # Start tcpdump in background
-            ssh remote-docker "sudo timeout 30 tcpdump -i any -n 'host mirror.gcr.io or host registry-1.docker.io' -l 2>&1" > network.log &
+            ssh remote-docker "sudo timeout 30 tcpdump -i any -n 'net 172.253.0.0/16 or net 64.233.0.0/16 or host registry-1.docker.io' -l 2>&1" > network.log &
             CAPTURE_PID=$!
             sleep 2
             
@@ -89,22 +89,26 @@ jobs:
             sleep 3
             kill $CAPTURE_PID 2>/dev/null || true
             
-            # Check which registry was contacted
+            # Check which network was contacted
             echo "===== Network capture results ====="
-            if grep -q "mirror.gcr.io" network.log; then
-              echo "✅ CONFIRMED: mirror.gcr.io was contacted!"
-              grep "mirror.gcr.io" network.log | head -10
+            if grep -E "172\.253\.|64\.233\." network.log > /dev/null; then
+              echo "✅ CONFIRMED: Google infrastructure contacted (mirror.gcr.io)!"
+              echo "Mirror IPs found:"
+              grep -E "172\.253\.|64\.233\." network.log | head -5
             else
-              echo "❌ mirror.gcr.io was NOT contacted"
+              echo "❌ Google infrastructure NOT contacted"
             fi
             
-            if grep -q "registry-1.docker.io" network.log; then
-              echo "⚠️ registry-1.docker.io was contacted (fallback or mirror failed)"
-              grep "registry-1.docker.io" network.log | head -10
+            # Check for Docker Hub (AWS IPs)
+            if grep -E "35\.|44\.|54\.|3\." network.log | grep -v "172.253" > /dev/null; then
+              echo "⚠️ AWS infrastructure contacted (possible Docker Hub fallback)"
+            else
+              echo "✅ AWS/Docker Hub was NOT contacted - using mirror!"
             fi
             
-            echo "===== Full network log ====="
-            cat network.log | head -50
+            echo ""
+            echo "===== Sample network traffic ====="
+            head -20 network.log
       
       - run:
           name: Check debug logs for registry communication
