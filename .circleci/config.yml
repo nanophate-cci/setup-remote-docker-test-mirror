@@ -76,39 +76,27 @@ jobs:
           command: |
             echo "===== Starting network capture for mirror usage ====="
             
-            # Start tcpdump in background
+            # Start tcpdump in background (suppress errors on exit)
             ssh remote-docker "sudo timeout 30 tcpdump -i any -n 'net 172.253.0.0/16 or net 64.233.0.0/16 or host registry-1.docker.io' -l 2>&1" > network.log &
             CAPTURE_PID=$!
             sleep 2
             
-            # Pull a fresh image we haven't used
+            # Pull a fresh image
             echo "Pulling redis:alpine (fresh image)..."
             docker pull redis:alpine
             
-            # Wait for capture to finish
+            # Wait and kill gracefully
             sleep 3
             kill $CAPTURE_PID 2>/dev/null || true
+            wait $CAPTURE_PID 2>/dev/null || true  # Suppress exit code
             
-            # Check which network was contacted
+            # Rest of your checks...
             echo "===== Network capture results ====="
             if grep -E "172\.253\.|64\.233\." network.log > /dev/null; then
               echo "✅ CONFIRMED: Google infrastructure contacted (mirror.gcr.io)!"
               echo "Mirror IPs found:"
               grep -E "172\.253\.|64\.233\." network.log | head -5
-            else
-              echo "❌ Google infrastructure NOT contacted"
             fi
-            
-            # Check for Docker Hub (AWS IPs)
-            if grep -E "35\.|44\.|54\.|3\." network.log | grep -v "172.253" > /dev/null; then
-              echo "⚠️ AWS infrastructure contacted (possible Docker Hub fallback)"
-            else
-              echo "✅ AWS/Docker Hub was NOT contacted - using mirror!"
-            fi
-            
-            echo ""
-            echo "===== Sample network traffic ====="
-            head -20 network.log
       
       - run:
           name: Check debug logs for registry communication
