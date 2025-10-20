@@ -48,9 +48,18 @@ jobs:
       - run:
           name: Test pulling an image (should use mirror)
           command: |
-            echo "Pulling nginx image (should use mirror)..."
+            # Clear any existing nginx images
+            docker rmi nginx:alpine 2>/dev/null || true
+            
+            # Pull the image
+            echo "Pulling nginx:alpine..."
             docker pull nginx:alpine
             
+            # Check daemon logs for mirror usage
+            echo "===== Checking Docker daemon logs ====="
+            ssh remote-docker "sudo journalctl -u docker -n 50 --no-pager" | grep -i mirror || echo "No mirror mentioned in logs"
+            ssh remote-docker "sudo journalctl -u docker -n 100 --no-pager" | grep -E "(mirror\.gcr\.io|Pulling)" || echo "No mirror activity found"
+
             echo "Image pulled successfully!"
             docker images | grep nginx
       
