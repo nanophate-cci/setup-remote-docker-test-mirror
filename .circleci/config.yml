@@ -21,7 +21,8 @@ jobs:
             echo "Writing daemon.json..."
             cat \<< EOF | ssh remote-docker "sudo tee /etc/docker/daemon.json"
             {
-              "registry-mirrors": ["https://mirror.gcr.io"]
+              "registry-mirrors": ["https://mirror.gcr.io"],
+              "log-level": "debug"
             }
             EOF
             
@@ -59,6 +60,8 @@ jobs:
             echo "===== Checking Docker daemon logs ====="
             ssh remote-docker "sudo journalctl -u docker -n 50 --no-pager" | grep -i mirror || echo "No mirror mentioned in logs"
             ssh remote-docker "sudo journalctl -u docker -n 100 --no-pager" | grep -E "(mirror\.gcr\.io|Pulling)" || echo "No mirror activity found"
+            ssh remote-docker "sudo journalctl -u docker --since '1 minute ago' --no-pager" | grep -i "mirror.gcr.io\|registry" 
+
 
             echo "Image pulled successfully!"
             docker images | grep nginx
