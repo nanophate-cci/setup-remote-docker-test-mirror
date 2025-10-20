@@ -39,9 +39,13 @@ jobs:
             echo "===== AFTER MIRROR SETUP ====="
             docker system info | grep -A 5 "Registry"
             
-            # Verify debug mode is active
+            # Verify debug mode is active (don't fail if not found)
             echo "===== Checking log level ====="
-            ssh remote-docker "sudo journalctl -u docker --since '5 seconds ago' --no-pager" | grep "Reloaded configuration" | tail -1 | grep -o '"log-level":"[^"]*"'
+            ssh remote-docker "sudo journalctl -u docker --since '30 seconds ago' --no-pager" | grep "Reloaded configuration" | tail -1 | grep -o '"log-level":"[^"]*"' || echo "Could not verify log level from journalctl"
+            
+            # Alternative: check daemon.json directly
+            echo "Log level in daemon.json:"
+            ssh remote-docker "cat /etc/docker/daemon.json" | grep "log-level"
             
             # Check specifically for the mirror
             if docker system info | grep -q "https://mirror.gcr.io"; then
