@@ -19,7 +19,7 @@ jobs:
           name: Configure Docker registry mirror
           command: |
             echo "Writing daemon.json..."
-            cat << EOF | ssh remote-docker "sudo tee /etc/docker/daemon.json"
+            cat \<< EOF | ssh remote-docker "sudo tee /etc/docker/daemon.json"
             {
               "registry-mirrors": ["https://mirror.gcr.io"]
             }
