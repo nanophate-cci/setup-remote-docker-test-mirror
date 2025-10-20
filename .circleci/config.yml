@@ -8,7 +8,8 @@ jobs:
     steps:
       - checkout
       
-      - setup_remote_docker      
+      - setup_remote_docker
+      
       - run:
           name: Check Docker info BEFORE mirror setup
           command: |
@@ -18,7 +19,7 @@ jobs:
       - run:
           name: Configure Docker registry mirror
           command: |
-            echo "Writing daemon.json..."
+            echo "Writing daemon.json with DEBUG logging..."
             cat \<< EOF | ssh remote-docker "sudo tee /etc/docker/daemon.json"
             {
               "registry-mirrors": ["https://mirror.gcr.io"],
@@ -30,13 +31,17 @@ jobs:
             ssh remote-docker "sudo pkill -SIGHUP dockerd"
             
             echo "Waiting for reload to complete..."
-            sleep 2
+            sleep 3
       
       - run:
           name: Verify Docker info AFTER mirror setup
           command: |
             echo "===== AFTER MIRROR SETUP ====="
             docker system info | grep -A 5 "Registry"
+            
+            # Verify debug mode is active
+            echo "===== Checking log level ====="
+            ssh remote-docker "sudo journalctl -u docker --since '5 seconds ago' --no-pager" | grep "Reloaded configuration" | tail -1 | grep -o '"log-level":"[^"]*"'
             
             # Check specifically for the mirror
             if docker system info | grep -q "https://mirror.gcr.io"; then
@@ -47,30 +52,89 @@ jobs:
             fi
       
       - run:
-          name: Test pulling an image (should use mirror)
+          name: Test mirror connectivity
           command: |
-            # Clear any existing nginx images
-            docker rmi nginx:alpine 2>/dev/null || true
+            echo "===== Testing mirror endpoint ====="
+            ssh remote-docker "curl -I https://mirror.gcr.io/v2/" || echo "⚠️ Mirror not reachable"
             
-            # Pull the image
-            echo "Pulling nginx:alpine..."
-            docker pull nginx:alpine
-            
-            # Check daemon logs for mirror usage
-            echo "===== Checking Docker daemon logs ====="
-            ssh remote-docker "sudo journalctl -u docker -n 50 --no-pager" | grep -i mirror || echo "No mirror mentioned in logs"
-            ssh remote-docker "sudo journalctl -u docker -n 100 --no-pager" | grep -E "(mirror\.gcr\.io|Pulling)" || echo "No mirror activity found"
-            ssh remote-docker "sudo journalctl -u docker --since '1 minute ago' --no-pager" | grep -i "mirror.gcr.io\|registry" 
-
-
-            echo "Image pulled successfully!"
-            docker images | grep nginx
+            echo "===== Testing Docker Hub endpoint ====="
+            ssh remote-docker "curl -I https://registry-1.docker.io/v2/" || echo "⚠️ Docker Hub not reachable"
       
       - run:
-          name: Verify daemon.json persists
+          name: Clear Docker cache completely
           command: |
-            echo "Checking daemon.json still exists..."
+            echo "===== Clearing all Docker cache ====="
+            docker system prune -af --volumes
+            docker system df
+      
+      - run:
+          name: Monitor pull with network capture
+          command: |
+            echo "===== Starting network capture for mirror usage ====="
+            
+            # Start tcpdump in background
+            ssh remote-docker "sudo timeout 30 tcpdump -i any -n 'host mirror.gcr.io or host registry-1.docker.io' -l 2>&1" > network.log &
+            CAPTURE_PID=$!
+            sleep 2
+            
+            # Pull a fresh image we haven't used
+            echo "Pulling redis:alpine (fresh image)..."
+            docker pull redis:alpine
+            
+            # Wait for capture to finish
+            sleep 3
+            kill $CAPTURE_PID 2>/dev/null || true
+            
+            # Check which registry was contacted
+            echo "===== Network capture results ====="
+            if grep -q "mirror.gcr.io" network.log; then
+              echo "✅ CONFIRMED: mirror.gcr.io was contacted!"
+              grep "mirror.gcr.io" network.log | head -10
+            else
+              echo "❌ mirror.gcr.io was NOT contacted"
+            fi
+            
+            if grep -q "registry-1.docker.io" network.log; then
+              echo "⚠️ registry-1.docker.io was contacted (fallback or mirror failed)"
+              grep "registry-1.docker.io" network.log | head -10
+            fi
+            
+            echo "===== Full network log ====="
+            cat network.log | head -50
+      
+      - run:
+          name: Check debug logs for registry communication
+          command: |
+            echo "===== Docker daemon debug logs ====="
+            ssh remote-docker "sudo journalctl -u docker --since '2 minutes ago' --no-pager" | grep -i -E "(mirror\.gcr\.io|registry-1\.docker\.io|GET.*v2|HEAD.*v2)" | head -50 || echo "No registry communication found in logs"
+      
+      - run:
+          name: Pull another image and verify
+          command: |
+            echo "===== Pulling postgres:alpine ====="
+            docker pull postgres:alpine
+            
+            echo "===== Checking recent logs ====="
+            ssh remote-docker "sudo journalctl -u docker --since '30 seconds ago' --no-pager" | tail -100 | grep -E "(mirror|registry-1)" || echo "No registry info in logs"
+      
+      - run:
+          name: Summary and verification
+          command: |
+            echo "===== SUMMARY ====="
+            echo "Configuration file:"
             ssh remote-docker "cat /etc/docker/daemon.json"
+            
+            echo ""
+            echo "Registry mirrors configured:"
+            docker system info | grep -A 3 "Registry Mirrors"
+            
+            echo ""
+            echo "Images pulled:"
+            docker images
+            
+            echo ""
+            echo "✅ If you see mirror.gcr.io in network capture above, the mirror is working!"
+            echo "❌ If you only see registry-1.docker.io, the mirror is not being used"
 
 workflows:
   test-mirror:
