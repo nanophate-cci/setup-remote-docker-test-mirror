@@ -1,0 +1,66 @@
+version: 2.1
+
+jobs:
+  test-docker-mirror:
+    docker:
+      - image: cimg/base:current
+    resource_class: small
+    steps:
+      - checkout
+      
+      - setup_remote_docker      
+      - run:
+          name: Check Docker info BEFORE mirror setup
+          command: |
+            echo "===== BEFORE MIRROR SETUP ====="
+            docker system info | grep -A 5 "Registry" || echo "No registry mirrors configured"
+      
+      - run:
+          name: Configure Docker registry mirror
+          command: |
+            echo "Writing daemon.json..."
+            cat << EOF | ssh remote-docker "sudo tee /etc/docker/daemon.json"
+            {
+              "registry-mirrors": ["https://mirror.gcr.io"]
+            }
+            EOF
+            
+            echo "Reloading Docker daemon config..."
+            ssh remote-docker "sudo pkill -SIGHUP dockerd"
+            
+            echo "Waiting for reload to complete..."
+            sleep 2
+      
+      - run:
+          name: Verify Docker info AFTER mirror setup
+          command: |
+            echo "===== AFTER MIRROR SETUP ====="
+            docker system info | grep -A 5 "Registry"
+            
+            # Check specifically for the mirror
+            if docker system info | grep -q "https://mirror.gcr.io"; then
+              echo "✅ SUCCESS: Registry mirror is configured!"
+            else
+              echo "❌ FAILED: Registry mirror NOT found"
+              exit 1
+            fi
+      
+      - run:
+          name: Test pulling an image (should use mirror)
+          command: |
+            echo "Pulling nginx image (should use mirror)..."
+            docker pull nginx:alpine
+            
+            echo "Image pulled successfully!"
+            docker images | grep nginx
+      
+      - run:
+          name: Verify daemon.json persists
+          command: |
+            echo "Checking daemon.json still exists..."
+            ssh remote-docker "cat /etc/docker/daemon.json"
+
+workflows:
+  test-mirror:
+    jobs:
+      - test-docker-mirror
